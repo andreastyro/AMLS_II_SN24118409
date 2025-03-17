@@ -11,7 +11,7 @@ import random
 
 class Div2K_Dataset(Dataset):
 
-    def __init__(self, root_dir, subset, scale, patch_size=4, transform=None):
+    def __init__(self, root_dir, subset, scale, patch_size=224, transform=None):
         self.root_dir = root_dir
         self.subset = subset
         self.scale = scale
@@ -25,17 +25,9 @@ class Div2K_Dataset(Dataset):
         self.lr_images = sorted([f for f in os.listdir(lr_dir) if f.endswith(('.png', '.jpg'))])
         self.hr_images = sorted([f for f in os.listdir(hr_dir) if f.endswith(('.png', '.jpg'))])
 
-        # Store full paths 
+        # Store full paths
         self.lr_paths = [os.path.join(lr_dir, img) for img in self.lr_images]
         self.hr_paths = [os.path.join(hr_dir, img) for img in self.hr_images]
-
-        # Find minimum width and height
-        self.min_lr_width = min(Image.open(path).size[0] for path in self.lr_paths)
-        self.min_lr_height = min(Image.open(path).size[1] for path in self.lr_paths)
-
-        self.min_hr_width = min(Image.open(path).size[0] for path in self.lr_paths)
-        self.min_hr_height = min(Image.open(path).size[1] for path in self.lr_paths)
-
 
     def __len__(self):
         """
@@ -55,29 +47,31 @@ class Div2K_Dataset(Dataset):
         lr_image = Image.open(self.lr_paths[index])
         hr_image = Image.open(self.hr_paths[index])
 
-        # Get image sizes
-        #lr_width, lr_height = lr_image.size
-        #hr_width, hr_height = hr_image.size
-
-        # Select a **random patch** location
-        #lr_x = random.randint(0, lr_width - self.patch_size)
-        #lr_y = random.randint(0, lr_height - self.patch_size)
-
-        #hr_x = lr_x * self.scale
-        #hr_y = lr_y * self.scale
-
-
-        # Crop Patches
-        #lr_patch = lr_image.crop((lr_x, lr_y, lr_x + self.patch_size, lr_y + self.patch_size))
-        #hr_patch = hr_image.crop((hr_x, hr_y, hr_x + self.patch_size, hr_y + self.patch_size))
-
-        # Crop images
-        lr_image = lr_image.crop((0, 0, self.min_lr_width, self.min_lr_height))
-        hr_image = hr_image.crop((0, 0, self.min_hr_height, self.min_hr_height))
-
         # Upscale LR image to match HR image
         lr_size = (hr_image.width, hr_image.height)
         lr_image = lr_image.resize(lr_size, Image.BICUBIC)
+
+        # Crop center patch for LR
+        lr_width, lr_height = lr_image.size
+
+        lr_left = (lr_width - self.patch_size) // 2
+        lr_top = (lr_height - self.patch_size) // 2
+
+        lr_image = lr_image.crop((lr_left, lr_top, lr_left + self.patch_size, lr_top + self.patch_size))
+
+        # Crop center patch for HR
+
+        hr_width, hr_height = hr_image.size
+
+        hr_left = (hr_width - self.patch_size) // 2
+        hr_top = (hr_height - self.patch_size) // 2
+
+        #hr_left = lr_left * self.scale
+        #hr_top = lr_top * self.scale
+        hr_image = hr_image.crop((hr_left, hr_top, hr_left + self.patch_size, hr_top + self.patch_size))
+
+        # Resize HR patch to match the LR patch size (32x32)
+        #hr_image = hr_image.resize((self.patch_size, self.patch_size), Image.BICUBIC)
 
         if self.transform:
             lr_image = self.transform(lr_image)
