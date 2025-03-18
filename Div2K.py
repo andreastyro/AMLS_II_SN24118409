@@ -11,7 +11,7 @@ import random
 
 class Div2K_Dataset(Dataset):
 
-    def __init__(self, root_dir, subset, scale, patch_size=224, transform=None):
+    def __init__(self, root_dir, subset, scale, patch_size=128, transform=None):
         self.root_dir = root_dir
         self.subset = subset
         self.scale = scale
@@ -49,29 +49,24 @@ class Div2K_Dataset(Dataset):
 
         # Upscale LR image to match HR image
         lr_size = (hr_image.width, hr_image.height)
-        lr_image = lr_image.resize(lr_size, Image.BICUBIC)
-
-        # Crop center patch for LR
-        lr_width, lr_height = lr_image.size
-
-        lr_left = (lr_width - self.patch_size) // 2
-        lr_top = (lr_height - self.patch_size) // 2
-
-        lr_image = lr_image.crop((lr_left, lr_top, lr_left + self.patch_size, lr_top + self.patch_size))
-
+        #lr_image = lr_image.resize(lr_size, Image.BICUBIC)
+        
         # Crop center patch for HR
 
         hr_width, hr_height = hr_image.size
 
-        hr_left = (hr_width - self.patch_size) // 2
-        hr_top = (hr_height - self.patch_size) // 2
+        hr_left = (hr_width - self.hr_patch_size) // 2
+        hr_top = (hr_height - self.hr_patch_size) // 2
 
-        #hr_left = lr_left * self.scale
-        #hr_top = lr_top * self.scale
-        hr_image = hr_image.crop((hr_left, hr_top, hr_left + self.patch_size, hr_top + self.patch_size))
+        hr_image = hr_image.crop((hr_left, hr_top, hr_left + self.hr_patch_size, hr_top + self.hr_patch_size))
 
-        # Resize HR patch to match the LR patch size (32x32)
-        #hr_image = hr_image.resize((self.patch_size, self.patch_size), Image.BICUBIC)
+        # Crop center patch for LR
+        lr_width, lr_height = lr_image.size
+
+        lr_left = hr_left // self.scale
+        lr_top = hr_top // self.scale
+
+        lr_image = lr_image.crop((lr_left, lr_top, lr_left + self.patch_size, lr_top + self.patch_size))
 
         if self.transform:
             lr_image = self.transform(lr_image)

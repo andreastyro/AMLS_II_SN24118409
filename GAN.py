@@ -1,20 +1,22 @@
+import os
+import pandas as pd
+import pynvml
+import numpy as np
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.functional as F
-from torch.utils.data import Dataset, DataLoader, random_split, Subset
+import torch.distributed as dist
+from torch.utils.data import Dataset, DataLoader, random_split, Subset, DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torchvision import transforms
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-import os
 
 from Div2K import Div2K_Dataset
 
-scale = 4
 
+scale = 4
 
 class Residual_Block(nn.Module):
     def __init__(self):
@@ -29,12 +31,12 @@ class Residual_Block(nn.Module):
     def forward(self, x):
         residual = x
         out = self.conv1(x)
-        out = self.bn1(x)
-        out = self.prelu(x)
-        out = self.conv2(x)
-        out = self.bn2(x)
+        out = self.bn1(out)
+        out = self.prelu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
 
-        out += residual
+        out = out + residual
 
         return out
 
@@ -52,14 +54,14 @@ class Generator(nn.Module):
         self.bn1 = nn.BatchNorm2d(64)
 
         self.conv3 = nn.Conv2d(64, 256, kernel_size=3, stride=1, padding=1)
-        self.pixel_shuffler1 = nn.PixelShuffle(upscale_factor=scale)
+        self.pixel_shuffler1 = nn.PixelShuffle(upscale_factor=2)
         self.relu2 = nn.PReLU()
 
         self.conv4 = nn.Conv2d(64, 256, kernel_size=3, stride=1, padding=1)
-        self.pixel_shuffler2 = nn.PixelShuffle(upscale_factor=scale)
+        self.pixel_shuffler2 = nn.PixelShuffle(upscale_factor=2)
         self.relu3 = nn.PReLU()
 
-        self.conv5 = nn.Conv2d(64, 3, kernel_size=9, stride=1, padding=1)
+        self.conv5 = nn.Conv2d(64, 3, kernel_size=9, stride=1, padding=4)
 
     def forward(self, x):
 
@@ -105,23 +107,23 @@ class Discriminator(nn.Module):
         self.relu3 = nn.LeakyReLU()
 
         self.conv4 = nn.Conv2d(128, 128, kernel_size=3, stride=2)
-        self.bn2 = nn.BatchNorm2d(128)
+        self.bn3 = nn.BatchNorm2d(128)
         self.relu4 = nn.LeakyReLU()
 
         self.conv5 = nn.Conv2d(128, 256, kernel_size=3, stride=1)
-        self.bn3 = nn.BatchNorm2d(256)
+        self.bn4 = nn.BatchNorm2d(256)
         self.relu5 = nn.LeakyReLU()
 
         self.conv6 = nn.Conv2d(256, 256, kernel_size=3, stride=2)
-        self.bn4 = nn.BatchNorm2d(256)
+        self.bn5 = nn.BatchNorm2d(256)
         self.relu6 = nn.LeakyReLU()
 
-        self.conv7 = nn.Conv2d(256, 512, kernel_size=3, stride=1)
-        self.bn5 = nn.BatchNorm2d(512)
+        self.conv7 = nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1)
+        self.bn6 = nn.BatchNorm2d(512)
         self.relu7 = nn.LeakyReLU()
 
-        self.conv8 = nn.Conv2d(512, 512, kernel_size=3, stride=2)
-        self.bn6 = nn.BatchNorm2d(512)
+        self.conv8 = nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)
+        self.bn7 = nn.BatchNorm2d(512)
         self.relu8 = nn.LeakyReLU()
 
         self.fc1 = nn.Linear(512, 1024)
@@ -139,15 +141,40 @@ class Discriminator(nn.Module):
         x = self.bn1(x)
         x = self.relu2(x)
 
-        x = x.view(-1, 64) # Negative one so we can vary the batch size
+        x = self.conv3(x)
+        x = self.bn2(x)
+        x = self.relu3(x)
+
+        x = self.conv4(x)
+        x = self.bn3(x)
+        x = self.relu4(x)
+
+        x = self.conv5(x)
+        x = self.bn4(x)
+        x = self.relu5(x)
+
+        x = self.conv6(x)
+        x = self.bn5(x)
+        x = self.relu6(x)
+
+        x = self.conv7(x)
+        x = self.bn6(x)
+        x = self.relu7(x)
+        
+        x = self.conv8(x)
+        x = self.bn7(x)
+        x = self.relu8(x)
+
+        x = x.view(-1, 512)
 
         x = self.fc1(x)
-        x = self.relu3(x)
+        x = self.relu9(x) 
 
         x = self.fc2(x)
         x = self.sigmoid1(x)
         
         return x
+
 
 # Check if CUDA is available and initialize device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,12 +183,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 generator = Generator().to(device)
 discriminator = Discriminator().to(device)
 
-# Wrap models with DataParallel for multi-GPU usage
-#generator = nn.DataParallel(generator)
-#discriminator = nn.DataParallel(discriminator)
-
 # Set up loss function and optimizers
-loss_function = nn.BCELoss()
+adversarial_loss_function = nn.BCELoss()
+content_loss_function = nn.MSELoss()
 
 generator_optim = optim.Adam(generator.parameters(), lr=0.001)
 discriminator_optim = optim.Adam(discriminator.parameters(), lr=0.001)
@@ -181,11 +205,11 @@ validation_dataset = Div2K_Dataset(root_dir, 'valid', scale=scale, transform=tra
 
 train_subset = Subset(train_dataset, list(range(80)))
 val_subset = Subset(validation_dataset, list(range(10)))
-train_subset, test_dataset = random_split(train_subset, [70, 10])
+train_subset, test_subset = random_split(train_subset, [70, 10])
 
 train_loader = DataLoader(train_subset, batch_size=16, shuffle=False)
 val_loader = DataLoader(val_subset, batch_size=16, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+test_loader = DataLoader(test_subset, batch_size=16, shuffle=False)
 
 epochs = 100
 
@@ -231,12 +255,12 @@ for epoch in range(epochs):
         # Real HR Images should be classified as REAL (1)
         real_pred = discriminator(hr_images)
         real_labels = torch.ones(real_pred.size(0), 1).float().to(device)
-        real_loss = loss_function(real_pred, real_labels)
+        real_loss = adversarial_loss_function(real_pred, real_labels)
 
         # Generated images should be classified as FAKE (0)
         fake_pred = discriminator(fake_images.detach())
         fake_labels = torch.zeros(fake_pred.size(0), 1).float().to(device)
-        fake_loss = loss_function(fake_pred, fake_labels)
+        fake_loss = adversarial_loss_function(fake_pred, fake_labels)
 
         d_loss = real_loss + fake_loss  # Discriminator Loss
         d_loss.backward()  # Backward Propagation
@@ -249,14 +273,25 @@ for epoch in range(epochs):
         gen_pred = discriminator(fake_images)
         gen_labels = torch.ones(gen_pred.size(0), 1).float().to(device)
 
-        gen_loss = loss_function(gen_pred, gen_labels)
+        content_loss = content_loss_function(fake_images, hr_images)
+        adversarial_loss = adversarial_loss_function(gen_pred, gen_labels)
+
+        # Combined loss (with appropriate weighting)
+        # Content loss is more important early on, adversarial loss becomes more important later
+        content_weight = 1.0
+        adversarial_weight = 0.001
+        
+        if epoch > 30:  # Gradually increase adversarial weight
+            adversarial_weight = min(0.001 * (epoch - 30) / 10, 0.01) 
+
+        gen_loss = content_weight * content_loss + adversarial_weight * adversarial_loss
         gen_loss.backward()
         generator_optim.step()
 
-        total_d_loss += d_loss
-        total_g_loss += gen_loss.item()
+        total_d_loss = total_d_loss + d_loss
+        total_g_loss = total_g_loss + gen_loss.item()
 
-              # Save side-by-side images (LR, Generated, HR) for the first batch of each epoch
+            # Save side-by-side images (LR, Generated, HR) for the first batch of each epoch
         if count == 1:
             # Extract the first images from the batch
             lr_image = lr_images[1].cpu().clone().detach()      # Low-resolution input image
@@ -307,12 +342,12 @@ for epoch in range(epochs):
             # REAL
             real_pred_val = discriminator(hr_images)
             real_labels_val = torch.ones(real_pred_val.size(0), 1).float().to(device)
-            real_loss_val = loss_function(real_pred_val, real_labels_val)
+            real_loss_val = adversarial_loss_function(real_pred_val, real_labels_val)
 
             # FAKE
             fake_pred_val = discriminator(fake_images_val.detach())
             fake_labels_val = torch.zeros(fake_pred_val.size(0), 1).float().to(device)
-            fake_loss_val = loss_function(fake_pred_val, fake_labels_val)
+            fake_loss_val = adversarial_loss_function(fake_pred_val, fake_labels_val)
 
             d_loss_val = real_loss_val + fake_loss_val
 
@@ -321,11 +356,21 @@ for epoch in range(epochs):
             gen_pred_val = discriminator(fake_images_val)
             gen_labels_val = torch.ones(gen_pred_val.size(0), 1).float().to(device)
 
-            gen_loss_val = loss_function(gen_pred_val, gen_labels_val)
+            content_loss_val = content_loss_function(fake_images_val, hr_images)
+            adversarial_loss_val = adversarial_loss_function(gen_pred_val, gen_labels_val)
 
-            total_d_loss_val += d_loss_val
-            total_g_loss_val += gen_loss_val.item()
+            # Use the same weighting as in training
+            content_weight = 1.0
+            adversarial_weight = 0.001
 
+            if epoch > 30:  # Same adaptive weight as in training
+                adversarial_weight = min(0.001 * (epoch - 30) / 10, 0.01)
+
+            gen_loss_val = content_weight * content_loss_val + adversarial_weight * adversarial_loss_val
+
+            total_d_loss_val = total_d_loss_val + d_loss_val
+            total_g_loss_val = total_g_loss_val + gen_loss_val.item()
+    
     print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {total_d_loss_val/len(val_loader):.4f} | G Loss: {total_g_loss_val/len(val_loader):.4f}")
 
 
@@ -348,13 +393,13 @@ with torch.no_grad():
         real_pred_test = discriminator(hr_images)
         real_labels_test = torch.ones(real_pred_test.size(0), 1).float().to(device)
         
-        real_loss_test = loss_function(real_pred_test, real_labels_test)
+        real_loss_test = adversarial_loss_function(real_pred_test, real_labels_test)
 
         # FAKE
 
         fake_pred_test = discriminator(lr_images)
         fake_labels_test = torch.zeros(fake_pred_test.size(0), 1).float().to(device)
-        fake_loss_test = loss_function(fake_pred_test, fake_labels_test)
+        fake_loss_test = adversarial_loss_function(fake_pred_test, fake_labels_test)
         d_loss_test = real_loss_test + fake_loss_test
 
         # -------- Test Generator ------- 
@@ -362,9 +407,9 @@ with torch.no_grad():
         gen_pred_test = discriminator(fake_images_test)
         gen_labels_test = torch.ones(gen_pred_test.size(0), 1).to(device)
 
-        gen_loss_test = loss_function(gen_pred_test, gen_labels_test)
+        gen_loss_test = adversarial_loss_function(gen_pred_test, gen_labels_test)
 
-        total_d_loss_test += d_loss_test
-        total_g_loss_test += gen_loss_test.item()
+        total_d_loss_test = total_d_loss_test + d_loss_test
+        total_g_loss_test = total_g_loss_test + gen_loss_test.item()
 
-    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {total_d_loss_test/test_loader:.4f} | G Loss: {total_g_loss_test/test_loader:.4f}")
+print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f}")
