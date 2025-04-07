@@ -249,18 +249,18 @@ image_dir = os.path.join(root_dir, "Images")
 os.makedirs(save_dir, exist_ok=True)
 os.makedirs(image_dir, exist_ok=True)
 
-train_dataset = Div2K_Dataset(root_dir, 'train', scale=scale, transform=transform)
-validation_dataset = Div2K_Dataset(root_dir, 'valid', scale=scale, transform=transform)
+train_dataset = Div2K_Dataset(root_dir, 'train', track='unknown', scale=scale, transform=transform)
+validation_dataset = Div2K_Dataset(root_dir, 'valid', track='unknown', scale=scale, transform=transform)
 
-train_subset = Subset(train_dataset, list(range(450)))
-val_subset = Subset(validation_dataset, list(range(50)))
-train_subset, test_subset = random_split(train_subset, [400, 50])
+train_subset = Subset(train_dataset, list(range(180)))
+val_subset = Subset(validation_dataset, list(range(20)))
+train_subset, test_subset = random_split(train_subset, [160, 20])
 
 train_loader = DataLoader(train_subset, batch_size=16, shuffle=False)
 val_loader = DataLoader(val_subset, batch_size=16, shuffle=False)
 test_loader = DataLoader(test_subset, batch_size=16, shuffle=False)
 
-epochs = 1
+epochs = 100
 
 train_g_losses = []
 train_d_losses = []
@@ -379,7 +379,7 @@ for epoch in range(epochs):
 
     train_g_losses.append(train_g_loss/len(train_loader))
     train_d_losses.append(train_d_loss/len(train_loader))
-    train_psnr.append(psnr_value)
+    train_psnr.append(psnr_value/len(train_loader))
 
     print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {train_d_loss/len(train_loader):.4f} | G Loss: {train_g_loss/len(train_loader):.4f} | PSNR : {psnr_value/len(train_loader):.4f}")
 
@@ -471,9 +471,9 @@ for epoch in range(epochs):
                 fig.savefig(os.path.join(image_dir, f"epoch_{epoch+1}_comparison_val.png"))
                 plt.close(fig)
     
-    val_g_losses.append(val_g_loss/len(train_loader))
-    val_d_losses.append(val_d_loss/len(train_loader))
-    psnr_value.append(psnr_value)
+    val_g_losses.append(val_g_loss/len(val_loader))
+    val_d_losses.append(val_d_loss/len(val_loader))
+    val_psnr.append(psnr_value/len(val_loader))
 
     print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {val_d_loss/len(val_loader):.4f} | G Loss: {val_g_loss/len(val_loader):.4f} | PSNR : {psnr_value/len(val_loader):.4f}")
 
@@ -514,13 +514,14 @@ with torch.no_grad():
 
         content_loss_test = content_loss_function(fake_images_test, hr_images)
         adversarial_loss_test = adversarial_loss_function(gen_pred_test, gen_labels_test)
-        v_loss_test = vgg_loss(fake_images_test, torch.from_numpy(hr_images).to(device).float())
+        vgg_loss_test = vgg_loss(fake_images_test, (hr_images).to(device).float())
+
         #perceptual_loss_test = ms_ssim_loss(fake_images_test, hr_images)
         #sr_loss_test = enhanced_loss(fake_images_test, hr_images)
 
         adversarial_weight = 0.001
 
-        gen_loss_test = v_loss_test + content_loss_test + adversarial_loss * adversarial_weight
+        gen_loss_test = vgg_loss_test + content_loss_test + adversarial_loss * adversarial_weight
 
         #gen_loss_test = content_loss_test * content_weight + adversarial_loss_test * adversarial_weight + perceptual_loss_test * perceptual_weight
 
@@ -565,32 +566,52 @@ with torch.no_grad():
 
 print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f} | PSNR : {psnr_value/len(test_loader):.4f}")
 
+# Move tensors to CPU if they're on CUDA, and convert to numpy
+def prepare_for_plot(data):
+    if isinstance(data, torch.Tensor):
+        if data.is_cuda:
+            return data.cpu().detach().numpy()
+        else:
+            return data.detach().numpy()
+    return data
+
+# Convert tensors to numpy arrays for plotting
+train_g_losses_np = [prepare_for_plot(loss) for loss in train_g_losses]
+train_d_losses_np = [prepare_for_plot(loss) for loss in train_d_losses]
+val_g_losses_np = [prepare_for_plot(loss) for loss in val_g_losses]
+val_d_losses_np = [prepare_for_plot(loss) for loss in val_d_losses]
+train_psnr_np = [prepare_for_plot(loss) for loss in train_psnr]
+val_psnr_np = [prepare_for_plot(loss) for loss in val_psnr]
+
+epochs_range = range(1, epochs + 1)
+
 # Create figure for losses
-plt.figure(figsize=(12, 6))
+fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+
 
 # Plot generator and discriminator losses
-plt.subplot(1, 2, 1)
-epochs_range = range(1, epochs + 1)
-plt.plot(epochs_range, train_g_losses, 'b-', label='Train Generator Loss')
-plt.plot(epochs_range, train_d_losses, 'r-', label='Train Discriminator Loss')
-plt.plot(epochs_range, val_g_losses, 'b--', label='Val Generator Loss')
-plt.plot(epochs_range, val_d_losses, 'r--', label='Val Discriminator Loss')
-plt.title('Generator and Discriminator Losses')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.grid(True, alpha=0.3)
+axes[0].plot(epochs_range, train_g_losses_np, 'b-', label='Train Generator Loss')
+axes[0].plot(epochs_range, val_g_losses_np, color='orange', label='Val Generator Loss')
+axes[0].set_title(f"Generator Loss vs Epochs for ×{scale}")
+axes[0].set_xlabel("Epochs")
+axes[0].set_ylabel("Loss")
+axes[0].legend(loc='upper right')
 
-# Plot PSNR values
-plt.subplot(1, 2, 2)
-plt.plot(epochs_range, train_psnr, 'g-', label='Train PSNR')
-plt.plot(epochs_range, val_psnr, 'g--', label='Validation PSNR')
-plt.title('PSNR Values')
-plt.xlabel('Epoch')
-plt.ylabel('PSNR (dB)')
-plt.legend()
-plt.grid(True, alpha=0.3)
+axes[1].plot(epochs_range, train_d_losses_np, 'b-', label='Train Discriminator Loss')
+axes[1].plot(epochs_range, val_d_losses_np, color='orange', label='Val Discriminator Loss')
+axes[1].set_title(f"Discriminator Loss vs Epochs for ×{scale}")
+axes[1].set_xlabel('Epoch')
+axes[1].set_ylabel('Loss')
+axes[1].legend(loc='upper right')
+
+# Plot PSNR values  
+axes[2].plot(epochs_range, train_psnr_np, 'b-', label='Train PSNR')
+axes[2].plot(epochs_range, val_psnr_np, color='orange', label='Validation PSNR')
+axes[2].set_title(f'PSNR Values vs Epochs for ×{scale}')
+axes[2].set_xlabel('Epoch')
+axes[2].set_ylabel('PSNR (dB)')
+axes[2].legend(loc='lower right')
+
 
 plt.tight_layout()
 plt.savefig(os.path.join(save_dir, "Plots.png"))
-plt.show()
