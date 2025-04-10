@@ -502,7 +502,7 @@ with torch.no_grad():
 
         # FAKE
 
-        fake_pred_test = discriminator(lr_images)
+        fake_pred_test = discriminator(fake_images_test.detach())
         fake_labels_test = torch.zeros(fake_pred_test.size(0), 1).float().to(device)
         fake_loss_test = adversarial_loss_function(fake_pred_test, fake_labels_test)
         d_loss_test = (real_loss_test + fake_loss_test) * 0.5
