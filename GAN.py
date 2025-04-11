@@ -390,7 +390,7 @@ for epoch in range(epochs):
     train_psnr.append(psnr_value/len(train_loader))
     train_ssim.append(train_ssim_value / len(train_loader))
 
-    print(f"Training Epoch [{epoch+1}/{epochs}] | D Loss: {train_d_loss/len(train_loader):.4f} | G Loss: {train_g_loss/len(train_loader):.4f} | PSNR : {psnr_value/len(train_loader):.4f} | SSIM: {train_ssim_value / len(train_loader)}")
+    print(f"Training Epoch [{epoch+1}/{epochs}] | D Loss: {train_d_loss/len(train_loader):.4f} | G Loss: {train_g_loss/len(train_loader):.4f} | PSNR: {psnr_value/len(train_loader):.4f} | SSIM: {train_ssim_value / len(train_loader)}")
 
     discriminator.eval()
     generator.eval()
@@ -488,7 +488,7 @@ for epoch in range(epochs):
     val_psnr.append(psnr_value/len(val_loader))
     val_ssim.append(val_ssim_value / len(val_loader))
 
-    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {val_d_loss/len(val_loader):.4f} | G Loss: {val_g_loss/len(val_loader):.4f} | PSNR : {psnr_value/len(val_loader):.4f} | SSIM: {val_ssim_value / len(val_loader)}")
+    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {val_d_loss/len(val_loader):.4f} | G Loss: {val_g_loss/len(val_loader):.4f} | PSNR: {psnr_value/len(val_loader):.4f} | SSIM: {val_ssim_value / len(val_loader)}")
 
 psnr_value = 0
 test_ssim_value = 0
@@ -579,11 +579,10 @@ with torch.no_grad():
             axs[2].axis('off')
             
             # Save the combined image; you can also use plt.show() to display it
-            fig.savefig(os.path.join(image_dir, f"epoch_{epoch+1}_comparison_test.png"))
+            fig.savefig(os.path.join(image_dir, f"Test_image.png"))
             plt.close(fig)
 
-
-print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f} | PSNR : {psnr_value/len(test_loader):.4f} | SSIM: {test_ssim_value/len(test_loader):.4f}")
+print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f} | PSNR: {psnr_value/len(test_loader):.4f} | SSIM: {test_ssim_value/len(test_loader):.4f}")
 
 # Move tensors to CPU if they're on CUDA, and convert to numpy
 def prepare_for_plot(data):
