@@ -11,7 +11,8 @@ import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from torchvision import transforms, models
 from torchvision.models import vgg19
-from torchmetrics.image import PeakSignalNoiseRatio
+from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+
 
 from Div2K import Div2K_Dataset
 from SR_Loss import EnhancedSRLoss
@@ -27,7 +28,7 @@ class Residual_Block(nn.Module):
         self.prelu = nn.PReLU()
         self.conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
-  
+    
     def forward(self, x):
         residual = x
         out = self.conv1(x)
@@ -185,7 +186,7 @@ class Discriminator(nn.Module):
 # Check if CUDA is available and initialize device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load a pretrained VGG19 model (feature extraction only)
+# Load VGG model
 vgg = models.vgg19(pretrained=True).features
 vgg.eval()  # Set to evaluation mode
 
@@ -193,7 +194,7 @@ vgg.eval()  # Set to evaluation mode
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 vgg.to(device)
 
-# Define VGG-based feature extractor
+# Define VGG feature extractor
 class VGGFeatureExtractor(nn.Module):
     def __init__(self, vgg, layers=7):  # Extract up to the first 7 layers
         super(VGGFeatureExtractor, self).__init__()
@@ -206,7 +207,7 @@ class VGGFeatureExtractor(nn.Module):
 vgg_features = VGGFeatureExtractor(vgg, layers=7).to(device)
 
 # Define VGG-based perceptual loss (MSE Loss)
-class VGGPerceptualLoss(nn.Module):
+class VGGPerceptualLoss(nn.Module): # Code imported from VGG
     def __init__(self):
         super(VGGPerceptualLoss, self).__init__()
         self.criterion = nn.MSELoss()
@@ -236,8 +237,8 @@ adversarial_loss_function = nn.BCELoss().to(device)
 content_loss_function = nn.MSELoss().to(device)
 vgg_loss = VGGPerceptualLoss().to(device)
 
-generator_optim = optim.Adam(generator.parameters(), lr=0.001)
-discriminator_optim = optim.Adam(discriminator.parameters(), lr=0.001)
+generator_optim = optim.Adam(generator.parameters(), lr=3e-4)
+discriminator_optim = optim.Adam(discriminator.parameters(), lr=3e-4)
 
 transform = transforms.Compose([
     transforms.ToTensor(),  # Convert to tensor
@@ -249,16 +250,16 @@ image_dir = os.path.join(root_dir, "Images")
 os.makedirs(save_dir, exist_ok=True)
 os.makedirs(image_dir, exist_ok=True)
 
-train_dataset = Div2K_Dataset(root_dir, 'train', track='unknown', scale=scale, transform=transform)
-validation_dataset = Div2K_Dataset(root_dir, 'valid', track='unknown', scale=scale, transform=transform)
+train_dataset = Div2K_Dataset(root_dir, 'train', track='bicubic', scale=scale, transform=transform)
+validation_dataset = Div2K_Dataset(root_dir, 'valid', track='bicubic', scale=scale, transform=transform)
 
-train_subset = Subset(train_dataset, list(range(180)))
-val_subset = Subset(validation_dataset, list(range(20)))
-train_subset, test_subset = random_split(train_subset, [160, 20])
+train_subset = Subset(train_dataset, list(range(450)))
+val_subset = Subset(validation_dataset, list(range(50)))
+train_subset, test_subset = random_split(train_subset, [400, 50])
 
-train_loader = DataLoader(train_subset, batch_size=16, shuffle=False)
-val_loader = DataLoader(val_subset, batch_size=16, shuffle=False)
-test_loader = DataLoader(test_subset, batch_size=16, shuffle=False)
+train_loader = DataLoader(train_subset, batch_size=4, shuffle=True)
+val_loader = DataLoader(val_subset, batch_size=4, shuffle=False)
+test_loader = DataLoader(test_subset, batch_size=4, shuffle=False)
 
 epochs = 100
 
@@ -270,12 +271,16 @@ val_g_losses = []
 val_d_losses = []
 val_psnr = []
 
+train_ssim = []
+val_ssim = []
+
 total_d_loss_test = 0
 total_g_loss_test = 0
 
 vgg.to(device)
 
 psnr = PeakSignalNoiseRatio().to(device)
+ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
 
 # Training loop
 for epoch in range(epochs):
@@ -289,7 +294,8 @@ for epoch in range(epochs):
     val_d_loss = 0
 
     psnr_value = 0
-
+    train_ssim_value = 0
+    
     for lr_images, hr_images in train_loader:
 
         count = count + 1
@@ -343,7 +349,9 @@ for epoch in range(epochs):
 
         psnr_score = psnr(fake_images, hr_images)
         psnr_value += psnr_score.item()
-
+        ssim_score = ssim(fake_images, hr_images)
+        train_ssim_value += ssim_score.item()
+        
         # Save side-by-side images (LR, Generated, HR) for the first batch of each epoch
         if count == 1:
             # Extract the first images from the batch
@@ -380,14 +388,16 @@ for epoch in range(epochs):
     train_g_losses.append(train_g_loss/len(train_loader))
     train_d_losses.append(train_d_loss/len(train_loader))
     train_psnr.append(psnr_value/len(train_loader))
+    train_ssim.append(train_ssim_value / len(train_loader))
 
-    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {train_d_loss/len(train_loader):.4f} | G Loss: {train_g_loss/len(train_loader):.4f} | PSNR : {psnr_value/len(train_loader):.4f}")
+    print(f"Training Epoch [{epoch+1}/{epochs}] | D Loss: {train_d_loss/len(train_loader):.4f} | G Loss: {train_g_loss/len(train_loader):.4f} | PSNR : {psnr_value/len(train_loader):.4f} | SSIM: {train_ssim_value / len(train_loader)}")
 
     discriminator.eval()
     generator.eval()
 
     count = 0
     psnr_value = 0
+    val_ssim_value = 0
 
     with torch.no_grad():
         for lr_images, hr_images in val_loader:
@@ -438,6 +448,8 @@ for epoch in range(epochs):
 
             psnr_score = psnr(fake_images_val, hr_images)
             psnr_value += psnr_score.item()
+            ssim_score = ssim(fake_images_val, hr_images)
+            val_ssim_value += ssim_score.item()
 
             # Save side-by-side images (LR, Generated, HR) for the first batch of each epoch
             if count == 1:
@@ -474,16 +486,21 @@ for epoch in range(epochs):
     val_g_losses.append(val_g_loss/len(val_loader))
     val_d_losses.append(val_d_loss/len(val_loader))
     val_psnr.append(psnr_value/len(val_loader))
+    val_ssim.append(val_ssim_value / len(val_loader))
 
-    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {val_d_loss/len(val_loader):.4f} | G Loss: {val_g_loss/len(val_loader):.4f} | PSNR : {psnr_value/len(val_loader):.4f}")
+    print(f"Epoch [{epoch+1}/{epochs}] | D Loss: {val_d_loss/len(val_loader):.4f} | G Loss: {val_g_loss/len(val_loader):.4f} | PSNR : {psnr_value/len(val_loader):.4f} | SSIM: {val_ssim_value / len(val_loader)}")
 
 psnr_value = 0
+test_ssim_value = 0
+count = 0
 
 discriminator.eval()
 generator.eval()
 
 with torch.no_grad():
     for lr_images, hr_images in test_loader:
+
+        count = count + 1
 
         lr_images, hr_images = lr_images.to(device), hr_images.to(device)
 
@@ -521,7 +538,7 @@ with torch.no_grad():
 
         adversarial_weight = 0.001
 
-        gen_loss_test = vgg_loss_test + content_loss_test + adversarial_loss * adversarial_weight
+        gen_loss_test = vgg_loss_test + content_loss_test + adversarial_loss_test * adversarial_weight
 
         #gen_loss_test = content_loss_test * content_weight + adversarial_loss_test * adversarial_weight + perceptual_loss_test * perceptual_weight
 
@@ -530,6 +547,8 @@ with torch.no_grad():
 
         psnr_score = psnr(fake_images_test, hr_images)
         psnr_value += psnr_score.item()
+        ssim_score = ssim(fake_images_test, hr_images)
+        test_ssim_value += ssim_score.item()
 
         # Save side-by-side images (LR, Generated, HR) for the first batch of each epoch
         if count == 1:
@@ -564,7 +583,7 @@ with torch.no_grad():
             plt.close(fig)
 
 
-print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f} | PSNR : {psnr_value/len(test_loader):.4f}")
+print(f"Test D Loss: {total_d_loss_test/len(test_loader):.4f} | Test G Loss: {total_g_loss_test/len(test_loader):.4f} | PSNR : {psnr_value/len(test_loader):.4f} | SSIM: {test_ssim_value/len(test_loader):.4f}")
 
 # Move tensors to CPU if they're on CUDA, and convert to numpy
 def prepare_for_plot(data):
@@ -582,12 +601,15 @@ val_g_losses_np = [prepare_for_plot(loss) for loss in val_g_losses]
 val_d_losses_np = [prepare_for_plot(loss) for loss in val_d_losses]
 train_psnr_np = [prepare_for_plot(loss) for loss in train_psnr]
 val_psnr_np = [prepare_for_plot(loss) for loss in val_psnr]
+train_ssim_np = [prepare_for_plot(s) for s in train_ssim]
+val_ssim_np = [prepare_for_plot(s) for s in val_ssim]
 
 epochs_range = range(1, epochs + 1)
 
 # Create figure for losses
-fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
-
+# Add 4th plot (expand subplot grid to 2x2)
+fig, axes = plt.subplots(2, 2, figsize=(12, 10), constrained_layout=True)
+axes = axes.flatten()
 
 # Plot generator and discriminator losses
 axes[0].plot(epochs_range, train_g_losses_np, 'b-', label='Train Generator Loss')
@@ -612,6 +634,13 @@ axes[2].set_xlabel('Epoch')
 axes[2].set_ylabel('PSNR (dB)')
 axes[2].legend(loc='lower right')
 
+# SSIM plot (new 4th axis)
+axes[3].plot(epochs_range, train_ssim_np, 'b-', label='Train SSIM')
+axes[3].plot(epochs_range, val_ssim_np, color='orange', linestyle='--', label='Val SSIM')
+axes[3].set_title("SSIM vs Epochs")
+axes[3].set_xlabel("Epochs")
+axes[3].set_ylabel("SSIM")
+axes[3].legend(loc='lower right')
 
 plt.tight_layout()
 plt.savefig(os.path.join(save_dir, "Plots.png"))
