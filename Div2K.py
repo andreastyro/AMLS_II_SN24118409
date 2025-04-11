@@ -11,15 +11,16 @@ import random
 
 class Div2K_Dataset(Dataset):
 
-    def __init__(self, root_dir, subset, scale, patch_size=128, transform=None):
+    def __init__(self, root_dir, subset, track, scale, patch_size=128, transform=None):
         self.root_dir = root_dir
         self.subset = subset
+        self.track = track
         self.scale = scale
         self.patch_size = patch_size
         self.hr_patch_size = patch_size * scale
         self.transform = transform
 
-        lr_dir = os.path.join(root_dir, 'Bicubic', f'DIV2K_{subset}_LR_bicubic_X{scale}', f'DIV2K_{subset}_LR_bicubic', f'X{scale}')
+        lr_dir = os.path.join(root_dir, track.capitalize(), f'DIV2K_{subset}_LR_{track}_X{scale}', f'DIV2K_{subset}_LR_{track}', f'X{scale}')
         hr_dir = os.path.join(root_dir, 'HR', f'DIV2K_{subset}_HR', f'DIV2K_{subset}_HR')
 
         self.lr_images = sorted([f for f in os.listdir(lr_dir) if f.endswith(('.png', '.jpg'))])
