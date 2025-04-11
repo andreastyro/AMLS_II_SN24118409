@@ -206,15 +206,15 @@ class VGGFeatureExtractor(nn.Module):
 # Initialize the VGG feature extractor
 vgg_features = VGGFeatureExtractor(vgg, layers=7).to(device)
 
-# Define VGG-based perceptual loss (MSE Loss)
-class VGGPerceptualLoss(nn.Module): # Code imported from VGG
+# Define VGG loss
+class VGGPerceptualLoss(nn.Module): 
     def __init__(self):
         super(VGGPerceptualLoss, self).__init__()
         self.criterion = nn.MSELoss()
 
     def forward(self, gen_out, hr_images):
         # Normalize input (if needed)
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device) # Source for values: https://gist.github.com/alper111/8233cdb0414b4cb5853f2f730ab95a49?permalink_comment_id=4423554
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
         gen_out = (gen_out - mean) / std
@@ -253,15 +253,15 @@ os.makedirs(image_dir, exist_ok=True)
 train_dataset = Div2K_Dataset(root_dir, 'train', track='bicubic', scale=scale, transform=transform)
 validation_dataset = Div2K_Dataset(root_dir, 'valid', track='bicubic', scale=scale, transform=transform)
 
-train_subset = Subset(train_dataset, list(range(450)))
-val_subset = Subset(validation_dataset, list(range(50)))
-train_subset, test_subset = random_split(train_subset, [400, 50])
+train_subset = Subset(train_dataset, list(range(180)))
+val_subset = Subset(validation_dataset, list(range(20)))
+train_subset, test_subset = random_split(train_subset, [160, 20])
 
 train_loader = DataLoader(train_subset, batch_size=4, shuffle=True)
-val_loader = DataLoader(val_subset, batch_size=4, shuffle=False)
-test_loader = DataLoader(test_subset, batch_size=4, shuffle=False)
+val_loader = DataLoader(val_subset, batch_size=4, shuffle=True)
+test_loader = DataLoader(test_subset, batch_size=4, shuffle=True)
 
-epochs = 100
+epochs = 3
 
 train_g_losses = []
 train_d_losses = []
